@@ -548,7 +548,7 @@ class Ball_Detection():
         gray_table = gray.copy()
         gray_table[table_mask == 0] = felt_gray_val
 
-        candidates = self.multi_pass_hough(gray_table, table_mask, min_r, max_r)
+        candidates = self.multi_pass_hough(gray_table, min_r, max_r)
 
         print(f"After Hough: {len(candidates)} candidates")
         print(f"min_r={min_r}, max_r={max_r}")
