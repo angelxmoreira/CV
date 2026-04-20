@@ -2088,8 +2088,8 @@ def main():
     bc = Ball_Classification()
     tp = Top_View()
 
-    #if debug_mode:
-    #    p.plot_resolutions()
+    if debug_mode:
+        p.plot_resolutions()
 
     all_results = []
 
@@ -2141,8 +2141,8 @@ def main():
                 out_h=400,
                 auto_size=False,
             )
-            #if debug_mode:
-            #    tp.debug_blue_cloth_pipeline(image_path=str(processed_path))
+            if debug_mode:
+                tp.debug_blue_cloth_pipeline(image_path=str(processed_path))
         except Exception:
             pass
     
