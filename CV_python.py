@@ -89,14 +89,6 @@ class Preprocessing():
 
         cv2.imwrite(str(out_path), img_normalized)
     
-    #def process_dir(self):
-    #    for img_path in IMAGE_DIR.rglob('*.jpg'):
-    #        rel_path = img_path.relative_to(IMAGE_DIR)
-    #        out_path = PROCESSED_DIR / rel_path
-    #        out_path.parent.mkdir(parents=True, exist_ok=True)
-#
-    #        self.process_and_save_image(img_path, out_path)
-    
 
 # Ball detection
 class Ball_Detection():
@@ -146,10 +138,6 @@ class Ball_Detection():
 
 
     def _detect_felt_mask(self, frame, view_type = "diagonal"):
-        """
-        Dynamically detect the felt region for diagonal/variable-crop images.
-        Uses a broad color search to find the table, THEN samples the exact median color.
-        """
         H, W = frame.shape[:2]
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
@@ -364,7 +352,7 @@ class Ball_Detection():
         return mask, median_hsv
 
 
-    def get_table_mask(self, frame):
+    def _get_table_mask(self, frame):
         H, W = frame.shape[:2]
         view_type = self._classify_view(frame)
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -377,7 +365,7 @@ class Ball_Detection():
 
         return mask, felt_hsv, view_type
 
-    def estimate_ball_radius(self, table_mask):
+    def _estimate_ball_radius(self, table_mask):
         contours, _ = cv2.findContours(table_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             return 8, 28
@@ -389,7 +377,7 @@ class Ball_Detection():
         max_r = max(20, int(nominal_r * 1.50))
         return min_r, max_r
 
-    def multi_pass_hough(self, gray_table, min_r, max_r):
+    def _multi_pass_hough(self, gray_table, min_r, max_r):
         min_dist = max(int(min_r * 2.2), 16)
         candidates = []
 
@@ -422,7 +410,7 @@ class Ball_Detection():
 
         return candidates
 
-    def circle_iou(self, c1, c2):
+    def _circle_iou(self, c1, c2):
         x1, y1, r1 = c1[:3]
         x2, y2, r2 = c2[:3]
 
@@ -439,7 +427,7 @@ class Ball_Detection():
         return intersection / smaller_area
 
 
-    def verify_and_nms(self, candidates, frame, table_mask, felt_hsv, min_r, debug= False):
+    def _verify_and_nms(self, candidates, frame, table_mask, felt_hsv, min_r, debug= False):
         H, W = table_mask.shape[:2]
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         fh, fs, fv = float(felt_hsv[0]), float(felt_hsv[1]), float(felt_hsv[2])
@@ -489,7 +477,7 @@ class Ball_Detection():
                     is_dup = True
                 elif dist < R_large * 1.50 and R_small < R_large * 0.75:
                     is_dup = True
-                elif self.circle_iou(c, vc) > 0.45:
+                elif self._circle_iou(c, vc) > 0.45:
                     is_dup = True
                 elif dist < (R_large + R_small) * 0.65:
                     is_dup = True
@@ -525,7 +513,7 @@ class Ball_Detection():
 
         return verified
 
-    def draw_detections(self, frame, balls):
+    def _draw_detections(self, frame, balls):
         out = frame.copy()
         h, w = frame.shape[:2]
         for (x, y, r) in balls:
@@ -538,59 +526,31 @@ class Ball_Detection():
         return out
 
     def detect_billiard_balls(self, frame, debug = False):
-        table_mask, felt_hsv, view_type = self.get_table_mask(frame)
+        table_mask, felt_hsv, view_type = self._get_table_mask(frame)
         if debug: print(f"Detected view: {view_type}")
 
-        min_r, max_r = self.estimate_ball_radius(table_mask)
+        min_r, max_r = self._estimate_ball_radius(table_mask)
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         felt_gray_val = int(cv2.mean(gray, mask=table_mask)[0])
         gray_table = gray.copy()
         gray_table[table_mask == 0] = felt_gray_val
 
-        candidates = self.multi_pass_hough(gray_table, min_r, max_r)
+        candidates = self._multi_pass_hough(gray_table, min_r, max_r)
 
-        print(f"After Hough: {len(candidates)} candidates")
-        print(f"min_r={min_r}, max_r={max_r}")
-
-        balls = self.verify_and_nms(candidates, frame, table_mask, felt_hsv, min_r, debug=debug)
+        balls = self._verify_and_nms(candidates, frame, table_mask, felt_hsv, min_r, debug=debug)
 
         if debug:
             fig, axes = plt.subplots(1, 3, figsize=(20, 6))
             axes[0].imshow(table_mask, cmap="gray"); axes[0].set_title("Table Mask")
             axes[1].imshow(gray_table, cmap="gray"); axes[1].set_title("Gray (felt only)")
-            axes[2].imshow(cv2.cvtColor(self.draw_detections(frame, balls), cv2.COLOR_BGR2RGB))
+            axes[2].imshow(cv2.cvtColor(self._draw_detections(frame, balls), cv2.COLOR_BGR2RGB))
             axes[2].set_title(f"Detections ({len(balls)} balls)")
             for ax in axes: ax.axis("off")
             plt.tight_layout()
             plt.show()
 
-        return self.draw_detections(frame, balls), balls
-
-    def run_on_directory(self, image_dir, show= True):
-        extensions = {".jpg", ".jpeg", ".png", ".bmp"}
-        paths = [
-            os.path.join(image_dir, f)
-            for f in sorted(os.listdir(image_dir))
-            if os.path.splitext(f)[1].lower() in extensions
-        ]
-        if not paths:
-            print(f"No images found in {image_dir}")
-            return
-        for img_path in paths:
-            frame = cv2.imread(img_path)
-            if frame is None:
-                print(f"  [skip] {img_path}")
-                continue
-            out, balls = self.detect_billiard_balls(frame, debug=False)
-            print(f"{os.path.basename(img_path):60s}  →  {len(balls):2d} balls")
-            if show:
-                plt.figure(figsize=(10, 6))
-                plt.imshow(cv2.cvtColor(out, cv2.COLOR_BGR2RGB))
-                plt.title(f"{os.path.basename(img_path)} — {len(balls)} balls")
-                plt.axis("off")
-                plt.tight_layout()
-                plt.show()
+        return self._draw_detections(frame, balls), balls
     
 # Classifying of the balls
 class Ball_Classification():
@@ -658,7 +618,6 @@ class Ball_Classification():
         return -1
     
     def _crop_ball(self, frame, ball, img_w, img_h, shrink=0.85):
-        """Return a square crop around the ball plus a circular mask of its interior."""
         x1 = int(ball["xmin"] * img_w); x2 = int(ball["xmax"] * img_w)
         y1 = int(ball["ymin"] * img_h); y2 = int(ball["ymax"] * img_h)
         crop = frame[y1:y2, x1:x2]
@@ -670,6 +629,7 @@ class Ball_Classification():
         mask = np.zeros((h, w), dtype=np.uint8)
         cv2.circle(mask, (cx, cy), r, 255, -1)
         return crop, mask
+    
     def _mask_from_ranges(self, hsv, ranges):
         combined = None
         for lo, hi in ranges:
@@ -689,7 +649,7 @@ class Ball_Classification():
             + 0.4 * abs(float(mean_v) - float(av))
         return 1.0 / (1.0 + d / self.mean_dist_scale)
 
-    def classify_ranked(self, frame, ball):
+    def _classify_ranked(self, frame, ball):
         img_h, img_w = frame.shape[:2]
         crop, mask = self._crop_ball(frame, ball, img_w, img_h, shrink=0.85)
         if crop is None:
@@ -758,11 +718,9 @@ class Ball_Classification():
         if max_mask_frac < self.eight_max_colour_frac and not has_white_band:
             ranked.append(("eight", float(black_frac)))
 
-        print(f"ball at x={ball['xmin']:.2f}: white={white_frac:.3f} black={black_frac:.3f} "
-              f"prefix={prefix} top3={[(l, f'{s:.3f}') for l,s in ranked[:3]]}")
-
         return ranked, white_frac, black_frac
-    def resolve_unique_labels(self, ranked_per_ball, white_fracs, black_fracs):
+    
+    def _resolve_unique_labels(self, ranked_per_ball, white_fracs, black_fracs):
         available = set(self.all_ball_labels)
         n = len(ranked_per_ball)
         result = [None] * n
@@ -832,11 +790,11 @@ class Ball_Classification():
         white_fracs = []
         black_fracs = []
         for b in balls:
-            ranked, wf, bf = self.classify_ranked(frame, b)
+            ranked, wf, bf = self._classify_ranked(frame, b)
             ranked_all.append(ranked)
             white_fracs.append(wf)
             black_fracs.append(bf)
-        return self.resolve_unique_labels(ranked_all, white_fracs, black_fracs)
+        return self._resolve_unique_labels(ranked_all, white_fracs, black_fracs)
     
     def _draw_labels(self, frame, balls, labels):
         img_h, img_w = frame.shape[:2]
@@ -848,12 +806,20 @@ class Ball_Classification():
             cv2.putText(vis, str(self.label_to_number(label)), (x1, max(0, y1 - 5)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
         return cv2.cvtColor(vis, cv2.COLOR_BGR2RGB)
+    
+    def visualize_classification(self, frame, balls, labels):
+        plt.figure(figsize=(12, 8))
+        plt.imshow(self._draw_labels(frame, balls, labels))
+        plt.title("Classification result")
+        plt.axis("off")
+        plt.tight_layout()
+        plt.show()
 
 class Top_View():
     def __init__(self):
         pass
 
-    def order_points_clockwise(self, pts):
+    def _order_points_clockwise(self, pts):
         pts = np.asarray(pts, dtype=np.float32)
         center = np.mean(pts, axis=0)
 
@@ -873,15 +839,13 @@ class Top_View():
         pts = np.roll(pts, -start_idx, axis=0)
         return pts.astype(np.float32)
 
-
-    def polygon_area(self, pts):
+    def _polygon_area(self, pts):
         pts = np.asarray(pts, dtype=np.float32)
         x = pts[:, 0]
         y = pts[:, 1]
         return 0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
 
-
-    def line_from_two_points(self, p1, p2):
+    def _line_from_two_points(self, p1, p2):
         x1, y1 = p1
         x2, y2 = p2
         a = y1 - y2
@@ -889,8 +853,7 @@ class Top_View():
         c = x1 * y2 - x2 * y1
         return np.array([a, b, c], dtype=np.float32)
 
-
-    def intersect_lines(self, line1, line2):
+    def _intersect_lines(self, line1, line2):
         a1, b1, c1 = line1
         a2, b2, c2 = line2
         det = a1 * b2 - a2 * b1
@@ -900,27 +863,23 @@ class Top_View():
         y = (c1 * a2 - c2 * a1) / det
         return np.array([x, y], dtype=np.float32)
 
-
-    def clip_point_to_image(self, pt, w, h):
+    def _clip_point_to_image(self, pt, w, h):
         x = float(np.clip(pt[0], 0, w - 1))
         y = float(np.clip(pt[1], 0, h - 1))
         return np.array([x, y], dtype=np.float32)
 
-
-    def normalize(self, v):
+    def _normalize(self, v):
         v = np.asarray(v, dtype=np.float32)
         n = np.linalg.norm(v) + 1e-8
         return v / n
 
-
-    def point_to_line_distance(self, line, points):
+    def _point_to_line_distance(self, line, points):
         a, b, c = line
         points = np.asarray(points, dtype=np.float32)
         denom = np.sqrt(a * a + b * b) + 1e-8
         return np.abs(a * points[:, 0] + b * points[:, 1] + c) / denom
 
-
-    def point_to_segment_distance(self, points, a, b):
+    def _point_to_segment_distance(self, points, a, b):
         points = np.asarray(points, dtype=np.float32)
         a = np.asarray(a, dtype=np.float32)
         b = np.asarray(b, dtype=np.float32)
@@ -933,8 +892,7 @@ class Top_View():
         proj = a[None, :] + t[:, None] * ab[None, :]
         return np.linalg.norm(points - proj, axis=1)
 
-
-    def line_to_border_points(self, line, w, h):
+    def _line_to_border_points(self, line, w, h):
         a, b, c = line
         pts = []
 
@@ -967,16 +925,15 @@ class Top_View():
                     best_pair = (pts[i], pts[j])
         return best_pair
 
-    def fit_line_to_points_huber(self, points):
+    def _fit_line_to_points_huber(self, points):
         points = np.asarray(points, dtype=np.float32).reshape(-1, 1, 2)
         vx, vy, x0, y0 = cv2.fitLine(points, cv2.DIST_HUBER, 0, 0.01, 0.01).flatten()
 
         p1 = np.array([x0 - 3000 * vx, y0 - 3000 * vy], dtype=np.float32)
         p2 = np.array([x0 + 3000 * vx, y0 + 3000 * vy], dtype=np.float32)
-        return self.line_from_two_points(p1, p2)
+        return self._line_from_two_points(p1, p2)
 
-
-    def robust_fit_line_iterative(self, points, max_iters=8, min_points=20):
+    def _robust_fit_line_iterative(self, points, max_iters=8, min_points=20):
         pts = np.asarray(points, dtype=np.float32)
         if len(pts) < min_points:
             raise ValueError(f"Not enough points for robust line fitting: {len(pts)}")
@@ -987,8 +944,8 @@ class Top_View():
             if len(current) < min_points:
                 break
 
-            line = self.fit_line_to_points_huber(current)
-            d = self.point_to_line_distance(line, current)
+            line = self._fit_line_to_points_huber(current)
+            d = self._point_to_line_distance(line, current)
 
             med = np.median(d)
             mad = np.median(np.abs(d - med)) + 1e-6
@@ -1002,10 +959,10 @@ class Top_View():
 
             current = current[inliers]
 
-        line = self.fit_line_to_points_huber(current)
+        line = self._fit_line_to_points_huber(current)
         return line, current
 
-    def segment_table_blue(self, image_bgr):
+    def _segment_table_blue(self, image_bgr):
         hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
 
         lower_blue = np.array([85, 70, 70], dtype=np.uint8)
@@ -1021,8 +978,7 @@ class Top_View():
 
         return cv2.bitwise_and(mask_hsv, blue_dom)
 
-
-    def apply_spatial_prior(self, mask):
+    def _apply_spatial_prior(self, mask):
         h, w = mask.shape
         roi_mask = np.zeros_like(mask)
         y0 = int(0.17 * h)
@@ -1031,8 +987,7 @@ class Top_View():
         roi_mask[y0:h, x0:x1] = 255
         return cv2.bitwise_and(mask, roi_mask)
 
-
-    def component_score(self, stats_row, image_area):
+    def _component_score(self, stats_row, image_area):
         area = stats_row[cv2.CC_STAT_AREA]
         bw = stats_row[cv2.CC_STAT_WIDTH]
         bh = stats_row[cv2.CC_STAT_HEIGHT]
@@ -1053,8 +1008,7 @@ class Top_View():
 
         return 2.0 * area + 50000.0 * extent
 
-
-    def suppress_top_text_components(self, mask, top_frac=0.28, max_area_frac=0.003, min_width_frac=0.25):
+    def _suppress_top_text_components(self, mask, top_frac=0.28, max_area_frac=0.003, min_width_frac=0.25):
         h, w = mask.shape
         image_area = h * w
 
@@ -1076,8 +1030,7 @@ class Top_View():
 
         return cleaned
 
-
-    def find_best_table_component(self, mask):
+    def _find_best_table_component(self, mask):
         num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
 
         if num_labels <= 1:
@@ -1090,7 +1043,7 @@ class Top_View():
         best_score = -1e18
 
         for label in range(1, num_labels):
-            score = self.component_score(stats[label], image_area)
+            score = self._component_score(stats[label], image_area)
             if score > best_score:
                 best_score = score
                 best_label = label
@@ -1102,8 +1055,7 @@ class Top_View():
         component_mask[labels == best_label] = 255
         return component_mask
 
-
-    def fill_table_component(self, mask_table):
+    def _fill_table_component(self, mask_table):
         contours, _ = cv2.findContours(mask_table, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             raise ValueError("No contour found in selected table component.")
@@ -1120,23 +1072,21 @@ class Top_View():
 
         return filled
 
-
-    def get_largest_contour(self, mask):
+    def _get_largest_contour(self, mask):
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
         if not contours:
             raise ValueError("No contour found.")
         return max(contours, key=cv2.contourArea)
 
-
-    def build_hull_mask(self, mask):
-        contour = self.get_largest_contour(mask)
+    def _build_hull_mask(self, mask):
+        contour = self._get_largest_contour(mask)
         hull = cv2.convexHull(contour, returnPoints=True)
 
         hull_mask = np.zeros_like(mask)
         cv2.drawContours(hull_mask, [hull], -1, 255, -1)
         return contour, hull, hull_mask
 
-    def detect_initial_corners_from_contour(self, contour):
+    def _detect_initial_corners_from_contour(self, contour):
         perimeter = cv2.arcLength(contour, True)
         contour_area = cv2.contourArea(contour)
 
@@ -1151,12 +1101,12 @@ class Top_View():
                 continue
 
             pts = approx.reshape(4, 2).astype(np.float32)
-            pts = self.order_points_clockwise(pts)
+            pts = self._order_points_clockwise(pts)
 
             if not cv2.isContourConvex(np.round(pts).astype(np.int32)):
                 continue
 
-            quad_area = self.polygon_area(pts)
+            quad_area = self._polygon_area(pts)
             if quad_area < 0.70 * contour_area:
                 continue
 
@@ -1193,10 +1143,10 @@ class Top_View():
 
         rect = cv2.minAreaRect(contour)
         pts = cv2.boxPoints(rect).astype(np.float32)
-        return self.order_points_clockwise(pts)
+        return self._order_points_clockwise(pts)
 
-    def split_points_by_quad_sides(self, points, quad):
-        quad = self.order_points_clockwise(quad)
+    def _split_points_by_quad_sides(self, points, quad):
+        quad = self._order_points_clockwise(quad)
         pts = np.asarray(points, dtype=np.float32)
 
         sides = [
@@ -1208,19 +1158,19 @@ class Top_View():
 
         dist_stack = []
         for a, b in sides:
-            dist_stack.append(self.point_to_segment_distance(pts, a, b))
+            dist_stack.append(self._point_to_segment_distance(pts, a, b))
 
         dist_stack = np.stack(dist_stack, axis=1)
         labels = np.argmin(dist_stack, axis=1)
         side_points = [pts[labels == i] for i in range(4)]
         return side_points, labels
 
-    def trim_points_along_side(self, points, a, b, keep_ratio=0.70):
+    def _trim_points_along_side(self, points, a, b, keep_ratio=0.70):
         pts = np.asarray(points, dtype=np.float32)
         if len(pts) < 20:
             return pts
 
-        d = self.normalize(b - a)
+        d = self._normalize(b - a)
         t = pts @ d
         order = np.argsort(t)
         pts_sorted = pts[order]
@@ -1231,12 +1181,11 @@ class Top_View():
             return pts_sorted
         return pts_sorted[margin:n - margin]
 
-
-    def fit_side_lines_from_dense_hull_contour(self, hull_contour, rough_quad):
+    def _fit_side_lines_from_dense_hull_contour(self, hull_contour, rough_quad):
         pts = hull_contour.reshape(-1, 2).astype(np.float32)
-        rough_quad = self.order_points_clockwise(rough_quad)
+        rough_quad = self._order_points_clockwise(rough_quad)
 
-        side_points, _ = self.split_points_by_quad_sides(pts, rough_quad)
+        side_points, _ = self._split_points_by_quad_sides(pts, rough_quad)
 
         sides = [
             (rough_quad[0], rough_quad[1]),
@@ -1254,11 +1203,11 @@ class Top_View():
                 raise ValueError(f"Too few dense hull-contour points for side {i}: {len(side_pts)}")
 
             a, b = sides[i]
-            pts_trimmed = self.trim_points_along_side(side_pts, a, b, keep_ratio=0.70)
+            pts_trimmed = self._trim_points_along_side(side_pts, a, b, keep_ratio=0.70)
             if len(pts_trimmed) < 20:
                 pts_trimmed = side_pts
 
-            line, inliers = self.robust_fit_line_iterative(
+            line, inliers = self._robust_fit_line_iterative(
                 pts_trimmed,
                 max_iters=8,
                 min_points=20
@@ -1276,31 +1225,29 @@ class Top_View():
         }
         return fitted_lines, debug
 
-
-    def refine_corners_from_lines(self, fitted_lines, image_shape):
+    def _refine_corners_from_lines(self, fitted_lines, image_shape):
         h, w = image_shape[:2]
 
         top, right, bottom, left = fitted_lines
 
-        tl = self.intersect_lines(left, top)
-        tr = self.intersect_lines(top, right)
-        br = self.intersect_lines(right, bottom)
-        bl = self.intersect_lines(bottom, left)
+        tl = self._intersect_lines(left, top)
+        tr = self._intersect_lines(top, right)
+        br = self._intersect_lines(right, bottom)
+        bl = self._intersect_lines(bottom, left)
 
         refined = [tl, tr, br, bl]
         if any(p is None for p in refined):
             raise ValueError("Failed to intersect fitted side lines.")
 
-        refined = np.array([self.clip_point_to_image(p, w, h) for p in refined], dtype=np.float32)
-        refined = self.order_points_clockwise(refined)
+        refined = np.array([self._clip_point_to_image(p, w, h) for p in refined], dtype=np.float32)
+        refined = self._order_points_clockwise(refined)
         return refined
 
-
-    def quad_is_reasonable(self, quad, image_shape):
-        quad = self.order_points_clockwise(quad)
+    def _quad_is_reasonable(self, quad, image_shape):
+        quad = self._order_points_clockwise(quad)
         h, w = image_shape[:2]
         img_area = h * w
-        area = self.polygon_area(quad)
+        area = self._polygon_area(quad)
 
         if area < 0.02 * img_area:
             return False
@@ -1314,9 +1261,9 @@ class Top_View():
 
         return np.min(edges) >= 20
 
-    def warp_from_corners(self, image_bgr, corners, out_w=720, out_h=400, assume_ordered=False):
+    def _warp_from_corners(self, image_bgr, corners, out_w=720, out_h=400, assume_ordered=False):
         if not assume_ordered:
-            corners = self.order_points_clockwise(corners)
+            corners = self._order_points_clockwise(corners)
         else:
             corners = np.asarray(corners, dtype=np.float32)
 
@@ -1331,10 +1278,9 @@ class Top_View():
         warped = cv2.warpPerspective(image_bgr, H, (out_w, out_h))
         return warped, H
 
-
-    def warp_mask_from_corners(self, mask, corners, out_w=720, out_h=400, assume_ordered=False):
+    def _warp_mask_from_corners(self, mask, corners, out_w=720, out_h=400, assume_ordered=False):
         if not assume_ordered:
-            corners = self.order_points_clockwise(corners)
+            corners = self._order_points_clockwise(corners)
         else:
             corners = np.asarray(corners, dtype=np.float32)
 
@@ -1349,10 +1295,9 @@ class Top_View():
         warped = cv2.warpPerspective(mask, H, (out_w, out_h), flags=cv2.INTER_NEAREST)
         return warped, H
 
-
-    def warp_from_corners_auto(self, image_bgr, corners, assume_ordered=False):
+    def _warp_from_corners_auto(self, image_bgr, corners, assume_ordered=False):
         if not assume_ordered:
-            corners = self.order_points_clockwise(corners)
+            corners = self._order_points_clockwise(corners)
         else:
             corners = np.asarray(corners, dtype=np.float32)
 
@@ -1366,7 +1311,7 @@ class Top_View():
         out_w = max(out_w, 200)
         out_h = max(out_h, 120)
 
-        return self.warp_from_corners(
+        return self._warp_from_corners(
             image_bgr,
             corners,
             out_w=out_w,
@@ -1374,7 +1319,7 @@ class Top_View():
             assume_ordered=True
         )
 
-    def build_inner_side_strips(self, warped_table_mask, strip_frac=0.03):
+    def _build_inner_side_strips(self, warped_table_mask, strip_frac=0.03):
         table = (warped_table_mask > 0).astype(np.uint8) * 255
         h, w = table.shape
 
@@ -1397,8 +1342,7 @@ class Top_View():
             "right": cv2.bitwise_and(table, right),
         }
 
-
-    def detect_middle_pocket_scores_in_warp(self, warped_bgr, warped_table_mask, dark_thresh=70):
+    def _detect_middle_pocket_scores_in_warp(self, warped_bgr, warped_table_mask, dark_thresh=70):
         gray = cv2.cvtColor(warped_bgr, cv2.COLOR_BGR2GRAY)
         h, w = gray.shape
 
@@ -1413,7 +1357,7 @@ class Top_View():
             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         )
 
-        strips = self.build_inner_side_strips(warped_table_mask, strip_frac=0.03)
+        strips = self._build_inner_side_strips(warped_table_mask, strip_frac=0.03)
 
         zones = {
             "top": (
@@ -1581,8 +1525,7 @@ class Top_View():
         }
         return strengths, debug
 
-
-    def detect_middle_pocket_strengths_from_mask_notches(self, warped_table_mask):
+    def _detect_middle_pocket_strengths_from_mask_notches(self, warped_table_mask):
         table = (warped_table_mask > 0).astype(np.uint8)
         h, w = table.shape
 
@@ -1639,8 +1582,7 @@ class Top_View():
         }
         return strengths, debug
 
-
-    def visualize_mask_notches(self, warped_table_mask, notch_debug):
+    def _visualize_mask_notches(self, warped_table_mask, notch_debug):
         table = (warped_table_mask > 0).astype(np.uint8) * 255
         vis = cv2.cvtColor(table, cv2.COLOR_GRAY2BGR)
         h, w = table.shape
@@ -1672,8 +1614,8 @@ class Top_View():
 
         return vis
 
-    def decide_corner_rotation_using_middle_pockets(self,image_bgr,raw_mask_table,corners,tmp_w=720,tmp_h=400,notch_weight=0.25,geom_weight=2.0):
-        canonical = self.order_points_clockwise(corners)
+    def _decide_corner_rotation_using_middle_pockets(self,image_bgr,raw_mask_table,corners,tmp_w=720,tmp_h=400,notch_weight=0.25,geom_weight=2.0):
+        canonical = self._order_points_clockwise(corners)
 
         def side_lengths(c):
             w_top = np.linalg.norm(c[1] - c[0])
@@ -1685,20 +1627,20 @@ class Top_View():
             return width_est, height_est
 
         def evaluate(c):
-            warped_img, _ = self.warp_from_corners(
+            warped_img, _ = self._warp_from_corners(
                 image_bgr, c, out_w=tmp_w, out_h=tmp_h, assume_ordered=True
             )
-            warped_mask, _ = self.warp_mask_from_corners(
+            warped_mask, _ = self._warp_mask_from_corners(
                 raw_mask_table, c, out_w=tmp_w, out_h=tmp_h, assume_ordered=True
             )
 
-            rgb_strengths, rgb_debug = self.detect_middle_pocket_scores_in_warp(
+            rgb_strengths, rgb_debug = self._detect_middle_pocket_scores_in_warp(
                 warped_img, warped_mask, dark_thresh=70
             )
-            notch_strengths, notch_debug = self.detect_middle_pocket_strengths_from_mask_notches(
+            notch_strengths, notch_debug = self._detect_middle_pocket_strengths_from_mask_notches(
                 warped_mask
             )
-            notch_vis = self.visualize_mask_notches(warped_mask, notch_debug)
+            notch_vis = self._visualize_mask_notches(warped_mask, notch_debug)
 
             strengths = {
                 "top": rgb_strengths["top"] + notch_weight * notch_strengths["top"],
@@ -1784,8 +1726,7 @@ class Top_View():
 
         return chosen["corners"], debug
 
-
-    def draw_debug_overlay(self, image_bgr, contour, hull, hull_contour, rough_corners, refined_corners, debug):
+    def _draw_debug_overlay(self, image_bgr, contour, hull, hull_contour, rough_corners, refined_corners, debug):
         vis = image_bgr.copy()
         h, w = vis.shape[:2]
 
@@ -1810,7 +1751,7 @@ class Top_View():
                 cv2.circle(vis, (x, y), 1, color, -1)
 
         for line in debug["fitted_lines"]:
-            pair = self.line_to_border_points(line, w, h)
+            pair = self._line_to_border_points(line, w, h)
             if pair is None:
                 continue
             p1, p2 = pair
@@ -1833,8 +1774,7 @@ class Top_View():
 
         return vis
 
-
-    def show_debug(self,image_bgr,mask_blue,mask_roi,mask_table_raw,mask_table_filled,overlay,warped,pocket_dark_mask=None,pocket_strengths=None,candidate_vis=None,notch_vis=None):
+    def _show_debug(self,image_bgr,mask_blue,mask_roi,mask_table_raw,mask_table_filled,overlay,warped,pocket_dark_mask=None,pocket_strengths=None,candidate_vis=None,notch_vis=None):
         image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
         overlay_rgb = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
         warped_rgb = cv2.cvtColor(warped, cv2.COLOR_BGR2RGB)
@@ -1894,23 +1834,23 @@ class Top_View():
         plt.tight_layout()
         plt.show()
 
-    def detect_blue_cloth_quad(self, image_bgr):
-        mask_blue = self.segment_table_blue(image_bgr)
-        mask_roi = self.apply_spatial_prior(mask_blue)
-        mask_roi = self.suppress_top_text_components(mask_roi)
+    def _detect_blue_cloth_quad(self, image_bgr):
+        mask_blue = self._segment_table_blue(image_bgr)
+        mask_roi = self._apply_spatial_prior(mask_blue)
+        mask_roi = self._suppress_top_text_components(mask_roi)
 
-        mask_table_raw = self.find_best_table_component(mask_roi)
+        mask_table_raw = self._find_best_table_component(mask_roi)
 
-        mask_table_filled = self.fill_table_component(mask_table_raw)
+        mask_table_filled = self._fill_table_component(mask_table_raw)
 
-        contour, hull, hull_mask = self.build_hull_mask(mask_table_filled)
-        hull_contour = self.get_largest_contour(hull_mask)
+        contour, hull, hull_mask = self._build_hull_mask(mask_table_filled)
+        hull_contour = self._get_largest_contour(hull_mask)
 
-        rough_corners = self.detect_initial_corners_from_contour(hull_contour)
-        fitted_lines, debug = self.fit_side_lines_from_dense_hull_contour(hull_contour, rough_corners)
-        refined_corners = self.refine_corners_from_lines(fitted_lines, image_bgr.shape)
+        rough_corners = self._detect_initial_corners_from_contour(hull_contour)
+        fitted_lines, debug = self._fit_side_lines_from_dense_hull_contour(hull_contour, rough_corners)
+        refined_corners = self._refine_corners_from_lines(fitted_lines, image_bgr.shape)
 
-        if not self.quad_is_reasonable(refined_corners, image_bgr.shape):
+        if not self._quad_is_reasonable(refined_corners, image_bgr.shape):
             raise ValueError("Detected cloth quadrilateral is not reasonable.")
 
         return {
@@ -1932,9 +1872,9 @@ class Top_View():
         if image_bgr is None:
             raise FileNotFoundError(f"Could not load image: {image_path}")
 
-        result = self.detect_blue_cloth_quad(image_bgr)
+        result = self._detect_blue_cloth_quad(image_bgr)
 
-        overlay = self.draw_debug_overlay(
+        overlay = self._draw_debug_overlay(
             image_bgr=image_bgr,
             contour=result["contour"],
             hull=result["hull"],
@@ -1944,7 +1884,7 @@ class Top_View():
             debug=result["debug"]
         )
 
-        oriented_corners, pocket_debug = self.decide_corner_rotation_using_middle_pockets(
+        oriented_corners, pocket_debug = self._decide_corner_rotation_using_middle_pockets(
             image_bgr=image_bgr,
             raw_mask_table=result["mask_table_raw"],
             corners=result["refined_corners"],
@@ -1955,13 +1895,13 @@ class Top_View():
         )
 
         if auto_size:
-            warped, H = self.warp_from_corners_auto(
+            warped, H = self._warp_from_corners_auto(
                 image_bgr,
                 oriented_corners,
                 assume_ordered=True
             )
         else:
-            warped, H = self.warp_from_corners(
+            warped, H = self._warp_from_corners(
                 image_bgr,
                 oriented_corners,
                 out_w=out_w,
@@ -1969,7 +1909,7 @@ class Top_View():
                 assume_ordered=True
             )
 
-        self.show_debug(
+        self._show_debug(
             image_bgr=image_bgr,
             mask_blue=result["mask_blue"],
             mask_roi=result["mask_roi"],
@@ -2023,15 +1963,15 @@ class Top_View():
         result["oriented_corners"] = oriented_corners
         result["pocket_debug"] = pocket_debug
         return result
-    
+
     def process_single_image(self, image_path, save_path=None, out_w=720, out_h=400, auto_size=False, notch_weight=0.25, geom_weight=2.0):
         image_bgr = cv2.imread(image_path)
         if image_bgr is None:
             raise FileNotFoundError(f"Could not load image: {image_path}")
 
-        result = self.detect_blue_cloth_quad(image_bgr)
+        result = self._detect_blue_cloth_quad(image_bgr)
 
-        oriented_corners, pocket_debug = self.decide_corner_rotation_using_middle_pockets(
+        oriented_corners, pocket_debug = self._decide_corner_rotation_using_middle_pockets(
             image_bgr=image_bgr,
             raw_mask_table=result["mask_table_raw"],
             corners=result["refined_corners"],
@@ -2042,13 +1982,13 @@ class Top_View():
         )
 
         if auto_size:
-            warped, H = self.warp_from_corners_auto(
+            warped, H = self._warp_from_corners_auto(
                 image_bgr,
                 oriented_corners,
                 assume_ordered=True
             )
         else:
-            warped, H = self.warp_from_corners(
+            warped, H = self._warp_from_corners(
                 image_bgr=image_bgr,
                 corners=oriented_corners,
                 out_w=out_w,
@@ -2093,81 +2033,6 @@ class Top_View():
             "candidate1_vertical_score": pocket_debug["candidate1_vertical_score"],
         }
     
-    def process_folder(self, input_folder, output_folder, out_w=720, out_h=400, auto_size=False, extensions=(".jpg", ".jpeg", ".png", ".bmp", ".webp"), notch_weight=0.25, geom_weight=2.0):
-        os.makedirs(output_folder, exist_ok=True)
-        results = []
-    
-        for filename in sorted(os.listdir(input_folder)):
-            if not filename.lower().endswith(extensions):
-                continue
-    
-            input_path = os.path.join(input_folder, filename)
-            name, _ = os.path.splitext(filename)
-            output_path = os.path.join(output_folder, f"{name}_topview.png")
-    
-            try:
-                result = self.process_single_image(
-                    image_path=input_path,
-                    save_path=output_path,
-                    out_w=out_w,
-                    out_h=out_h,
-                    auto_size=auto_size,
-                    notch_weight=notch_weight,
-                    geom_weight=geom_weight
-                )
-    
-                results.append({
-                    "file": filename,
-                    "status": "ok",
-                    "output": output_path,
-    
-                    "rough_corners": result["rough_corners"],
-                    "refined_corners": result["refined_corners"],
-                    "oriented_corners": result["oriented_corners"],
-    
-                    "rotation_k": result["rotation_k"],
-                    "rotated_90": result["rotated_90"],
-    
-                    "horizontal_score": result["horizontal_score"],
-                    "vertical_score": result["vertical_score"],
-                    "geom_score": result["geom_score"],
-                    "total_score": result["total_score"],
-    
-                    "candidate0_total_score": result["candidate0_total_score"],
-                    "candidate1_total_score": result["candidate1_total_score"],
-    
-                    "candidate0_horizontal_score": result["candidate0_horizontal_score"],
-                    "candidate0_vertical_score": result["candidate0_vertical_score"],
-                    "candidate1_horizontal_score": result["candidate1_horizontal_score"],
-                    "candidate1_vertical_score": result["candidate1_vertical_score"],
-    
-                    "rgb_strengths": result["rgb_strengths"],
-                    "notch_strengths": result["notch_strengths"],
-                    "combined_strengths": result["combined_strengths"],
-                })
-    
-                print(
-                    f"[OK] {filename} -> {output_path} | "
-                    f"rotated_90={result['rotated_90']} "
-                    f"(k={result['rotation_k']}) | "
-                    f"C0={result['candidate0_total_score']:.2f} "
-                    f"C1={result['candidate1_total_score']:.2f} | "
-                    f"H={result['horizontal_score']:.2f} "
-                    f"V={result['vertical_score']:.2f} | "
-                    f"G={result['geom_score']:.2f} | "
-                    f"T={result['total_score']:.2f}"
-                )
-    
-            except Exception as e:
-                results.append({
-                    "file": filename,
-                    "status": "error",
-                    "error": str(e),
-                })
-                print(f"[ERROR] {filename}: {e}")
-    
-        return results
-    
 # Reading from JSON file
 def read_json(input_json):
     with open(input_json) as f:
@@ -2188,13 +2053,12 @@ def write_json(output_json, all_results):
     with open(output_json, "w") as f:
         json.dump(all_results, f, indent=4)
 
-def detect_and_format_balls(frame):
-    """Detect balls and convert to normalized bounding-box dicts."""
+def detect_and_format_balls(frame, debug):
     if frame is None:
         return 0, []
 
     bd = Ball_Detection()
-    _, balls_raw = bd.detect_billiard_balls(frame, debug=False)
+    _, balls_raw = bd.detect_billiard_balls(frame, debug=debug)
 
     img_h, img_w = frame.shape[:2]
     balls_data = []
@@ -2210,10 +2074,22 @@ def detect_and_format_balls(frame):
     return len(balls_data), balls_data
 
 def main():
+
+    debug_mode = "--debug" in sys.argv
+    if debug_mode:
+        sys.argv.remove("--debug")
+
     input_json_path = sys.argv[1] if len(sys.argv) > 1 else "input.json"
     output_json_path = sys.argv[2] if len(sys.argv) > 2 else "output.json"
 
     image_paths = read_json(input_json=input_json_path)
+
+    p = Preprocessing(height=HEIGHT, width=WIDTH)
+    bc = Ball_Classification()
+    tp = Top_View()
+
+    #if debug_mode:
+    #    p.plot_resolutions()
 
     all_results = []
 
@@ -2230,15 +2106,14 @@ def main():
             continue
 
         processed_path = PROCESSED_DIR / img_name
-        p = Preprocessing(height=HEIGHT, width=WIDTH)
+        
         p.process_and_save_image(str(img_path), str(processed_path))
 
         frame = cv2.imread(str(processed_path))
-        ball_count, balls_list = detect_and_format_balls(frame)
+        ball_count, balls_list = detect_and_format_balls(frame, debug_mode)
 
         cleaned_balls = []
         if frame is not None and balls_list:
-            bc = Ball_Classification()
             labels = bc.classify_image(frame, balls_list)
             for b, label in zip(balls_list, labels):
                 cleaned_balls.append({
@@ -2248,16 +2123,16 @@ def main():
                     "ymin": b["ymin"],
                     "ymax": b["ymax"],
                 })
-        
         all_results.append({
             "image_path": img_path_str,
             "num_balls": len(cleaned_balls),
             "balls": cleaned_balls,
         })
+        if debug_mode:
+            bc.visualize_classification(frame, cleaned_balls, labels)
 
         name_no_ext = os.path.splitext(img_name)[0]
         topview_path = os.path.join(TOP_VIEW_DIR, f"{name_no_ext}.jpg")
-        tp = Top_View()
         try:
             tp.process_single_image(
                 image_path=str(processed_path),
@@ -2266,6 +2141,8 @@ def main():
                 out_h=400,
                 auto_size=False,
             )
+            #if debug_mode:
+            #    tp.debug_blue_cloth_pipeline(image_path=str(processed_path))
         except Exception:
             pass
     
