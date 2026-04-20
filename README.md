@@ -11,7 +11,6 @@ The script expects the following directories in the project root (adjustable in 
 ├── input.json # Input for the images
 ├── main.py # Main python script
 ├── README.md
-├── requirements
 ```
 ## Requirements
 
@@ -25,15 +24,14 @@ pip install Pillow matplotlib seaborn opencv-python numpy
 python main.py [<input_json>] [<output_json>] [--debug]
 ```
 ### Arguments
-Argument || Description || Default
---
-`input_json` || Path to a JSON file containing a list of image paths. || `input.json`
 
---
-`ouput_json` || Path where the output JSON will be saved. || `output.json`
+| Argument | Description | Default |
+| -------- | ------- | ------- |
+| `input_json`  | Path to a JSON file containing a list of image paths.    | `input.json`  |
+| `ouput_json` | Path where the output JSON will be saved.     | `output.json`    |
+| `--debug`    | Enable debug mode.    | Disabled    |
 
---
-`--debug` || Enable debug mode.	|| Disabled
+
 
 
 
